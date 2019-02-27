@@ -348,7 +348,8 @@ int main(int argc, char **argv)
 	char* g_server_ip = malloc(IP_SIZE);
  	int MACHINE;	
 	if (!strcmp(argv[1], "c")){
-		//client
+
+				//client
 		MACHINE = CLIENT;
 
 	    int head_socket, selret, sock_index;
@@ -467,10 +468,11 @@ int main(int argc, char **argv)
 							//printf("[%s:END]\n", command_str);
 						}
 						else if (!strcmp(command_str, "SEND")){
+							cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
 							command_str = strtok(NULL, delimiters);				
 							char* ip = command_str;
-							command_str = strtok(NULL, delimiters);
-							char msg[BUFFER_SIZE];
+							command_str = strtok(NULL, "\n");
+							char msg[BUFFER_SIZE+IP_SIZE];
 							memset(msg, '\0', sizeof msg);
 							strcat(msg, ip);
 							strcat(msg, ":");
@@ -478,35 +480,12 @@ int main(int argc, char **argv)
 							int sent = send(g_server_fd, msg, strlen(msg), 0);
 							if (sent != strlen(msg)) perror("could not send entire msg\n");
 							fflush(stdout);				
+							cse4589_print_and_log("[%s:END]\n", "SEND");
 							}		
 								
 						free(cmd);
 			    }
-			    else{
-				/* Initialize buffer to receieve response */
-				char *buffer = (char*) malloc(sizeof(char)*BUFFER_SIZE);
-				memset(buffer, '\0', BUFFER_SIZE);
-				
-				if(recv(sock_index, buffer, BUFFER_SIZE, 0) <= 0){
-				    close(sock_index);
-
-				    /* Remove from watched list */
-				    FD_CLR(sock_index, &master_list);
-				}
-				else {
-					if(send(sock_index, buffer, strlen(buffer), 0) == strlen(buffer)){
-						//printf("Done!\n");
-					}
-					fflush(stdout);
-				}
-
-				free(buffer);
-			    }
-			}
-		    }
-		}
-    }
-	}
+		
 	else{
 		//server
 		MACHINE = SERVER;
