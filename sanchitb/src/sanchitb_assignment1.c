@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <netinet/in.h>
+#include <limits.h>
 #include "dict.h"
 
 #define CLIENT 1
@@ -39,8 +40,8 @@
 #define STDIN 0
 #define TRUE 1
 #define FALSE 0
-#define CMD_SIZE 100
-#define BUFFER_SIZE 256
+#define CMD_SIZE 300
+#define BUFFER_SIZE 300 
 #define IP_SIZE 16
 #define HOSTNAME_SIZE 100
 #define MAX_CLIENTS 4
@@ -48,7 +49,7 @@
 
 int g_server_fd = -1;
 int g_server_port = -1;
-
+int g_logged_in = 0;
 void itoa(int n, char s[]);
 
 struct client {
@@ -95,6 +96,21 @@ for (i = 0; i < n-1; i++){
 }
 } 
 
+/* https://stackoverflow.com/questions/1068849/how-do-i-determine-the-number-of-digits-of-an-integer-in-c */
+int numPlaces (int n) {
+	
+    if (n < 0) n = (n == INT_MIN) ? INT_MAX : -n;
+    if (n < 10) return 1;
+    if (n < 100) return 2;
+    if (n < 1000) return 3;
+    if (n < 10000) return 4;
+    if (n < 100000) return 5;
+    if (n < 1000000) return 6;
+    if (n < 10000000) return 7;
+    if (n < 100000000) return 8;
+    if (n < 1000000000) return 9;
+    return 10;
+}
 /* https://beej.us/guide/bgnet/html/multi/getpeernameman.html */
 
 char* socket_to_ip(int s){
@@ -125,6 +141,24 @@ void logout(){
 void login(){
 
 }
+
+int sendall(int s, char *buf, size_t len)
+{
+    int total = 0;        // how many bytes we've sent
+    int bytesleft = len; // how many we have left to send
+    int n;
+
+    while(total < len) {
+        n = send(s, buf+total, bytesleft, 0);
+        if (n == -1) { break; }
+        total += n;
+        bytesleft -= n;
+    }
+
+    len = total; // return number actually sent here
+
+    return n==-1?-1:0; // return -1 on failure, 0 on success
+} 
 
 void add_client(int clientfd, struct sockaddr_in * client_address, char ip_copy[]){
 	/* Adds a client's information to the global array and logs them in */
@@ -306,7 +340,19 @@ int connect_to_host(char *server_ip, int server_port, char* g_server_ip)
 
 
 }
+int is_validip(char* ip){
+	struct sockaddr_in dummy;
+	return inet_pton(AF_INET, ip, &dummy.sin_addr);
+}
 
+int is_validip_loggedin(char* ip){
+	int flag = 0;
+	for (int i = 0; i < MAX_CLIENTS; ++i){
+		if (clients[i] == NULL) continue;
+		if (!strcmp(ip, clients[i]->ip)) flag = 1;
+	}
+	return flag;
+}
 void get_logged_in(char* info){
         int i = 0;
 
@@ -385,7 +431,7 @@ int main(int argc, char **argv)
 								exit(-1);
 
 							/*//printf("\nI got: %s\n", cmd);*/
-							char* delimiters = " \n";	
+							char* delimiters = " \n";
 							char* command_str = strtok(cmd, delimiters);
 							//printf("command_str: %s\n", command_str);
 							if (!strcmp(command_str, "AUTHOR")){
@@ -409,13 +455,15 @@ int main(int argc, char **argv)
 							cse4589_print_and_log("[%s:END]\n", command_str);
 						}
 						else if (!strcmp(command_str, "REFRESH")){
+							if (!g_logged_in) {cse4589_print_and_log("[%s:ERROR]\n", command_str);cse4589_print_and_log("[%s:END]\n", command_str);continue;}
 							cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
 							/* logout and log back in */
 
 							FD_CLR(g_server_fd, &master_list);
 							FD_CLR(g_server_fd, &watch_list);
 							close(g_server_fd);
-							char* ip;
+							char ip[IP_SIZE];
+                                                        memset(ip, '\0', sizeof ip);
 							strcpy(ip, g_server_ip);
 							int port = g_server_port;
 							
@@ -438,12 +486,21 @@ int main(int argc, char **argv)
 
 						}
 						else if (!strcmp(command_str, "LOGIN")){
-							//printf("[%s:SUCCESS]\n", command_str);
 							command_str = strtok(NULL, delimiters);
 							char* ip = command_str;
+							if (is_validip(ip) <= 0 ){
+								cse4589_print_and_log("[%s:ERROR]\n", "LOGIN");
+								cse4589_print_and_log("[%s:END]\n", "LOGIN");
+								continue;
+							}
 							command_str = strtok(NULL, delimiters);
 							int port = atoi(command_str);
-							
+							if (strlen(command_str) != numPlaces(port)){
+								cse4589_print_and_log("[%s:ERROR]\n", "LOGIN");
+								cse4589_print_and_log("[%s:END]\n", "LOGIN");
+								continue;
+							}	
+							cse4589_print_and_log("[%s:SUCCESS]\n", "LOGIN");
 							int server = connect_to_host(ip, port, g_server_ip);
 
 							char *list = (char*) malloc(sizeof(char)*BUFFER_SIZE);
@@ -457,34 +514,92 @@ int main(int argc, char **argv)
 							/* Register the listening socket */
 							FD_SET(server, &master_list);
 							head_socket = server;
-							//printf("[%s:END]\n", command_str);
+							g_logged_in = 1;
+							cse4589_print_and_log("[%s:END]\n", "LOGIN");
 						}
 						else if (!strcmp(command_str, "LOGOUT")){
 							//printf("[%s:SUCCESS]\n", command_str);
+							cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
+						
 							FD_CLR(g_server_fd, &master_list);
 							FD_CLR(g_server_fd, &watch_list);
 							close(g_server_fd);
-							for (int free = 0; free < MAX_CLIENTS; ++free) clients[free] = NULL;
-							//printf("[%s:END]\n", command_str);
+							for (int free = 0; free < MAX_CLIENTS; ++free) {if (clients[free] != NULL) clients[free] = NULL;}
+							cse4589_print_and_log("[%s:END]\n", command_str);
+							g_logged_in = 0;
 						}
-						else if (!strcmp(command_str, "SEND")){
-							cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
-							command_str = strtok(NULL, delimiters);				
-							char* ip = command_str;
+						else if (!strcmp(command_str, "SEND") || !strcmp(command_str, "BROADCAST")){
+							char ip[IP_SIZE] ;
+							memset(ip, '\0', sizeof ip);
+							char* command_str_copy = "";
+							if (!strcmp(command_str, "BROADCAST")){
+								strcpy(ip, "255.255.255.255");	
+								command_str_copy = "BROADCAST";
+								continue;
+							}
+							else{
+								command_str = strtok(NULL, delimiters);				
+								strcpy(ip, command_str);
+								command_str_copy = "SEND";
+							}
+							if (is_validip(ip) <= 0 || !is_validip_loggedin(ip)){
+								cse4589_print_and_log("[%s:ERROR]\n", command_str_copy);
+								cse4589_print_and_log("[%s:END]\n", command_str_copy);
+								continue;
+							}
+							cse4589_print_and_log("[%s:SUCCESS]\n", command_str_copy);
 							command_str = strtok(NULL, "\n");
 							char msg[BUFFER_SIZE+IP_SIZE];
 							memset(msg, '\0', sizeof msg);
 							strcat(msg, ip);
 							strcat(msg, ":");
 							strcat(msg, command_str);
-							int sent = send(g_server_fd, msg, strlen(msg), 0);
-							if (sent != strlen(msg)) perror("could not send entire msg\n");
+							char temp[3];
+							memset(temp, '\0', sizeof temp);
+							itoa(strlen(msg), temp);
+							if (send(g_server_fd, temp, sizeof temp, 0) <= 0) perror("could not send length\n");
+							if (sendall(g_server_fd, msg, strlen(msg)) == -1) perror("Could not send message\n");
 							fflush(stdout);				
 							cse4589_print_and_log("[%s:END]\n", "SEND");
-							}		
+							}
+						else if (!strcmp(command_str, "EXIT")){
+							close(g_server_fd);	
+							for (int free = 0; free < MAX_CLIENTS; ++free) {if (clients[free] != NULL) clients[free] = NULL;}
+							return 0;
+						}		
 								
 						free(cmd);
 			    }
+			else{
+				/* Initialize buffer to receieve response */
+				char *buffer = (char*) malloc(sizeof(char)*BUFFER_SIZE);
+				memset(buffer, '\0', BUFFER_SIZE);
+				if (recv(sock_index, buffer, BUFFER_SIZE, 0) <= 0){/*TODO: CHANGE SOMETHING HEE */}
+				int msg_size = atoi(buffer);
+				if(recv(sock_index, buffer, msg_size, MSG_WAITALL) <= 0){
+				    close(sock_index);
+
+				    /* Remove from watched list */
+				    FD_CLR(sock_index, &master_list);
+				}
+				else {
+					
+					cse4589_print_and_log("[%s:SUCCESS]\n", "RECEIVED");
+					char* token = strtok(buffer, ":");
+	                                char from[IP_SIZE]; 
+	                                strcpy(from, token);
+	                                token = strtok(NULL, "");
+	
+					cse4589_print_and_log("msg from:%s\n[msg]:%s\n", from, token);	
+					fflush(stdout);
+					cse4589_print_and_log("[%s:END]\n", "RECEIVED");
+				}
+				free(buffer);
+			    }
+			}
+		}
+	}
+    }}
 		
 	else{
 		//server
@@ -632,8 +747,11 @@ int main(int argc, char **argv)
                         /* Initialize buffer to receieve response */
                         char *buffer = (char*) malloc(sizeof(char)*BUFFER_SIZE);
                         memset(buffer, '\0', BUFFER_SIZE);
-
-                        if(recv(sock_index, buffer, BUFFER_SIZE, 0) <= 0){
+			char msgsize[4];
+			memset(msgsize, '\0', sizeof msgsize);
+			if (recv(sock_index, msgsize, 4, 0) <= 0) perror("could not get length\n");
+			int msg_size = atoi(msgsize);
+			if(recv(sock_index, buffer, msg_size, MSG_WAITALL) <= 0){
                             	/* Remove from watched list */
                             	FD_CLR(sock_index, &master_list);
 				char temp[2];
@@ -656,7 +774,7 @@ int main(int argc, char **argv)
 				char* token = strtok(buffer, ":");
 				char to[IP_SIZE];	
 				strcpy(to, token);
-				token = strtok(NULL, "\0");
+				token = strtok(NULL, "\n");
 				const char* from = lookup_ip(sock_index, map); 
 				cse4589_print_and_log("msg from:%s, to:%s\n[msg]:%s\n", from, to, token);
 				int send_socket = -1;
@@ -669,7 +787,12 @@ int main(int argc, char **argv)
 				strcat(msg, from);
 				strcat(msg, ":");
 				strcat(msg, token);
-				if(send(send_socket, msg, strlen(msg), 0) != strlen(msg)) perror("could not send to recipient\n");
+				char buffer_msgsize[3];
+				memset(buffer_msgsize, '\0', sizeof buffer_msgsize);
+				itoa(msg_size, buffer_msgsize);
+				if (send(send_socket, buffer_msgsize,strlen(buffer_msgsize), 0) <= 0) perror("could not send msg length\n");
+				fflush(stdout);
+				if(sendall(send_socket, msg, strlen(msg)) == -1) perror("could not send to recipient\n");
 				cse4589_print_and_log("[%s:END]\n", "RELAYED");
                         }
 
