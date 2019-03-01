@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <limits.h>
+#include <netinet/tcp.h>
 #include "dict.h"
 
 #define CLIENT 1
@@ -59,7 +60,7 @@ struct client {
 	int logged_in;
 	int num_sent;
 	int num_recv;
-		
+	int sockfd;		
 } ;
 struct client* clients[4] = {
 		NULL,
@@ -199,9 +200,12 @@ void add_client(int clientfd, struct sockaddr_in * client_address, char ip_copy[
 	ptr->logged_in = TRUE;
 	ptr->num_sent = 0;
 	ptr->num_recv = 0;	
-
+	ptr->sockfd = clientfd;
 	clients[i] = ptr;
-
+	int flag = 1;
+	int result = setsockopt(clientfd, IPPROTO_TCP, TCP_NODELAY, (char* ) &flag, sizeof (int));
+	if (result < 0) printf("error setting opts\n");
+        printf("mapping ip: %s to socket: %i\n", ip, clientfd);
 	}
 
 
@@ -532,20 +536,20 @@ int main(int argc, char **argv)
 							char ip[IP_SIZE] ;
 							memset(ip, '\0', sizeof ip);
 							char* command_str_copy = "";
+							
 							if (!strcmp(command_str, "BROADCAST")){
 								strcpy(ip, "255.255.255.255");	
 								command_str_copy = "BROADCAST";
-								continue;
 							}
 							else{
 								command_str = strtok(NULL, delimiters);				
 								strcpy(ip, command_str);
 								command_str_copy = "SEND";
-							}
-							if (is_validip(ip) <= 0 || !is_validip_loggedin(ip)){
-								cse4589_print_and_log("[%s:ERROR]\n", command_str_copy);
-								cse4589_print_and_log("[%s:END]\n", command_str_copy);
-								continue;
+								if (is_validip(ip) <= 0 || !is_validip_loggedin(ip)){
+									cse4589_print_and_log("[%s:ERROR]\n", command_str_copy);
+									cse4589_print_and_log("[%s:END]\n", command_str_copy);
+									continue;
+								}
 							}
 							cse4589_print_and_log("[%s:SUCCESS]\n", command_str_copy);
 							command_str = strtok(NULL, "\n");
@@ -554,13 +558,13 @@ int main(int argc, char **argv)
 							strcat(msg, ip);
 							strcat(msg, ":");
 							strcat(msg, command_str);
-							char temp[3];
+							char temp[4];
 							memset(temp, '\0', sizeof temp);
 							itoa(strlen(msg), temp);
 							if (send(g_server_fd, temp, sizeof temp, 0) <= 0) perror("could not send length\n");
 							if (sendall(g_server_fd, msg, strlen(msg)) == -1) perror("Could not send message\n");
 							fflush(stdout);				
-							cse4589_print_and_log("[%s:END]\n", "SEND");
+							cse4589_print_and_log("[%s:END]\n", command_str_copy);
 							}
 						else if (!strcmp(command_str, "EXIT")){
 							close(g_server_fd);	
@@ -574,12 +578,15 @@ int main(int argc, char **argv)
 				/* Initialize buffer to receieve response */
 				char *buffer = (char*) malloc(sizeof(char)*BUFFER_SIZE);
 				memset(buffer, '\0', BUFFER_SIZE);
-				if (recv(sock_index, buffer, BUFFER_SIZE, 0) <= 0){/*TODO: CHANGE SOMETHING HEE */}
-				int msg_size = atoi(buffer);
+				
+				char msgsize[4];
+				memset(msgsize, '\0', sizeof msgsize);
+				if (recv(sock_index, msgsize, 4, 0) <= 0) perror("could not get length\n");
+				int msg_size = atoi(msgsize);
+				printf("msg size: %i\n", msg_size);
+				memset(buffer, '\0', BUFFER_SIZE);
 				if(recv(sock_index, buffer, msg_size, MSG_WAITALL) <= 0){
 				    close(sock_index);
-
-				    /* Remove from watched list */
 				    FD_CLR(sock_index, &master_list);
 				}
 				else {
@@ -707,7 +714,7 @@ int main(int argc, char **argv)
                         
 			caddr_len = sizeof(client_addr);
                         fdaccept = accept(server_socket, (struct sockaddr *)&client_addr, &caddr_len);
-                        if(fdaccept < 0)
+			if(fdaccept < 0)
                             perror("Accept failed.");
 			/*//printf("accept socket: %i\n", fdaccept);*/
 			/*//printf("\nRemote Host connected!\n");*/                        
@@ -781,18 +788,31 @@ int main(int argc, char **argv)
 				for (int i = 0; i <= head_socket; ++i){
 					if (!strcmp(lookup_ip(i, map), to)) send_socket = i;
 				}
-				fflush(stdout);fflush(stdin);
+				fflush(stdout);
 				char msg[BUFFER_SIZE+IP_SIZE];
 	                        memset(msg, '\0', sizeof msg); 
 				strcat(msg, from);
 				strcat(msg, ":");
 				strcat(msg, token);
-				char buffer_msgsize[3];
+				char buffer_msgsize[4];
 				memset(buffer_msgsize, '\0', sizeof buffer_msgsize);
 				itoa(msg_size, buffer_msgsize);
-				if (send(send_socket, buffer_msgsize,strlen(buffer_msgsize), 0) <= 0) perror("could not send msg length\n");
-				fflush(stdout);
-				if(sendall(send_socket, msg, strlen(msg)) == -1) perror("could not send to recipient\n");
+				if (!strcmp(to, "255.255.255.255")){
+					for (int i = 0; i < MAX_CLIENTS; ++i){
+						if (clients[i] == NULL )continue;
+						if (!clients[i]->logged_in)continue;
+						send_socket = clients[i]->sockfd;
+						if (send(send_socket, buffer_msgsize,sizeof (buffer_msgsize), 0) <= 0) perror("could not send msg length\n");
+						fflush(stdout);
+						if(sendall(send_socket, msg, strlen(msg)) == -1) perror("could not send to recipient\n");
+					}
+				}
+				else{
+					if (send(send_socket, buffer_msgsize,sizeof (buffer_msgsize), 0) <= 0) perror("could not send msg length\n");
+				
+					fflush(stdout);
+					if(sendall(send_socket, msg, strlen(msg)) == -1) perror("could not send to recipient\n");
+				}
 				cse4589_print_and_log("[%s:END]\n", "RELAYED");
                         }
 
