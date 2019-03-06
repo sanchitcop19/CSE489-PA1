@@ -62,7 +62,10 @@ struct client {
 	int num_sent;
 	int num_recv;
 	int sockfd;		
+	char blocked[MAX_CLIENTS][IP_SIZE];
+
 } ;
+
 struct client* clients[4] = {
 		NULL,
 		NULL,
@@ -85,6 +88,7 @@ void edit_port(char ip[], char port[]){
 	}
 };
 
+/* https://www.geeksforgeeks.org/bubble-sort/ */
 void bubbleSort(struct client* arr[], int n) 
 { 
 int i, j; 
@@ -221,6 +225,11 @@ void add_client(int clientfd, struct sockaddr_in * client_address, char ip_copy[
 	ptr->num_recv = 0;	
 	ptr->sockfd = clientfd;
 	clients[i] = ptr;
+	memset(clients[i]->blocked[0], '\0', sizeof clients[i]->blocked[0]);	
+	memset(clients[i]->blocked[1], '\0', sizeof clients[i]->blocked[0]);	
+	memset(clients[i]->blocked[2], '\0', sizeof clients[i]->blocked[0]);	
+	memset(clients[i]->blocked[3], '\0', sizeof clients[i]->blocked[0]);	
+
 	int flag = 1;
 	int result = setsockopt(clientfd, IPPROTO_TCP, TCP_NODELAY, (char* ) &flag, sizeof (int));
 	if (result < 0) printf("error setting opts\n");
@@ -339,7 +348,31 @@ void create_list(char buffer[]){
 	}
 				
 }
+void list_blocked(char* ip){
 
+	int id = 0;
+	for (int list_id = 0; list_id < MAX_CLIENTS; ++list_id){
+		if (clients[list_id] == NULL) continue;
+		if (!strcmp(ip, clients[list_id]->ip)){
+			for (int i = 0; i < MAX_CLIENTS; ++i){
+				if (strlen(clients[list_id]->blocked[i])  == 0) continue;
+				for (int j = 0; j < MAX_CLIENTS; ++j){
+					
+					if (clients[j] == NULL) continue;
+					if (!strcmp(clients[list_id]->blocked[i], clients[j]->ip)){
+					++id;	
+					char hostname[HOSTNAME_SIZE];
+					strcpy(hostname, clients[j]->hostname);
+					char ip_addr[IP_SIZE];
+					strcpy(ip_addr, clients[j]->ip);
+					int port_num = clients[j]->port;
+					cse4589_print_and_log("%-5d%-35s%-20s%-8d\n", (id++), hostname, ip_addr, port_num);
+					}
+				}	
+			}
+		}
+	}
+}
 void list_statistics(){
         int id = 0;
         for (int list_id = 0; list_id < MAX_CLIENTS; ++list_id){
@@ -351,6 +384,7 @@ void list_statistics(){
                 int num_msg_sent = clients[list_id]->num_sent;
                 int num_msg_rcv = clients[list_id]->num_recv;
                 
+                bubbleSort(clients, 4);
                 if (clients[list_id]->logged_in)
                 cse4589_print_and_log("%-5d%-35s%-8d%-8d%-8s\n", id, hostname, num_msg_sent, num_msg_rcv, "logged-in");
                 else 
@@ -522,7 +556,7 @@ int main(int argc, char **argv)
 							FD_SET(server, &master_list);
 							head_socket = server;
 							////printf("[%s:END]\n", command_str);
-							list_clients();
+							//list_clients();
 							cse4589_print_and_log("[%s:END]\n", command_str);
 
 						}
@@ -603,6 +637,19 @@ int main(int argc, char **argv)
 							fflush(stdout);				
 							cse4589_print_and_log("[%s:END]\n", command_str_copy);
 							}
+						else if (!strcmp(command_str, "BLOCK")){
+							cse4589_print_and_log("[%s:SUCCESS]\n", "BLOCK");
+							command_str = strtok(NULL, "\n");
+							char ip[IP_SIZE];
+							strcpy(ip, command_str);
+							char msg[IP_SIZE+2];
+							memset(msg, '\0', sizeof msg);
+							strcat(msg, "B;");
+							strcat(msg, ip);
+							if (sendall(g_server_fd, msg, strlen(msg)) == -1) perror("Could not send message\n");
+							fflush(stdout);				
+							cse4589_print_and_log("[%s:END]\n", "BLOCK");
+						}
 						else if (!strcmp(command_str, "EXIT")){
 							close(g_server_fd);	
 							for (int free = 0; free < MAX_CLIENTS; ++free) {if (clients[free] != NULL) clients[free] = NULL;}
@@ -655,7 +702,6 @@ int main(int argc, char **argv)
 	/* http://www.cs.yale.edu/homes/aspnes/pinewiki/C(2f)HashTables.html?highlight=%28CategoryAlgorithmNotes%29 */
 	Dict map;
 	map = DictCreate();
-	
 	int port, server_socket, head_socket, selret, sock_index, fdaccept=0, caddr_len;
         struct sockaddr_in server_addr, client_addr;
         fd_set master_list, watch_list;
@@ -720,7 +766,7 @@ int main(int argc, char **argv)
 
 						/*////printf("\nI got: %s\n", cmd);*/
 						
-						char* command_str = strtok(cmd, "\n");
+						char* command_str = strtok(cmd, " \n");
 						/*////printf("command_str: %s\n", command_str);*/
 						if (!strcmp(command_str, "AUTHOR")){
 													
@@ -750,7 +796,12 @@ int main(int argc, char **argv)
                                                         list_statistics();
                                                         cse4589_print_and_log("[%s:END]\n", command_str);
 
-                                                }
+                                                }else if (!strcmp(command_str, "BLOCKED")){
+                                                        cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
+							command_str = strtok(NULL, "\n");
+							list_blocked(command_str);	
+                                                        cse4589_print_and_log("[%s:END]\n", "BLOCKED");
+						}
 								
 						free(cmd);
                     }
@@ -823,12 +874,57 @@ int main(int argc, char **argv)
 				DictDelete(map, temp);
 			}
                         else {
-				cse4589_print_and_log("[%s:SUCCESS]\n", "RELAYED");
-				char* token = strtok(buffer, ":");
+					
+				char* token = strtok(buffer, ":;");
+				if (!strcmp(token, "B")){
+				//Block messagae
+					token = strtok(NULL, "\n");
+					//token contains ip address
+					const char* blocker = lookup_ip(sock_index, map);	
+			    		for (int client = 0; client < MAX_CLIENTS; ++client){
+			    			if (clients[client] == NULL) continue;
+						if (!strcmp(clients[client]->ip,blocker)){
+							int blocki = 0;
+							while (strlen(clients[client]->blocked[blocki]) != 0){
+								blocki++;
+							}
+							strcpy(clients[client]->blocked[blocki], token);
+						}
+					}
+					continue;
+				}
+					
+
 				char to[IP_SIZE];	
 				strcpy(to, token);
 				token = strtok(NULL, "\n");
+				int flag = 0;
 				const char* from = lookup_ip(sock_index, map); 
+				
+			    		for (int client = 0; client < MAX_CLIENTS; ++client){
+			    			if (clients[client] == NULL) continue;
+						if (!strcmp(clients[client]->ip, to)){
+							int blocki = -1;
+							while (blocki < 4){
+								blocki++;
+								if(strlen(clients[client]->blocked[blocki]) == 0){
+									continue;
+								}
+								if(!strcmp(clients[client]->blocked[blocki], from)){
+									flag = 1;	
+								}
+								
+							}
+						}
+						
+					}
+
+				if (flag){
+					cse4589_print_and_log("[%s:ERROR]\n", "RELAYED");
+					cse4589_print_and_log("[%s:END]\n", "RELAYED");
+					continue;
+				}
+				cse4589_print_and_log("[%s:SUCCESS]\n", "RELAYED");
 				cse4589_print_and_log("msg from:%s, to:%s\n[msg]:%s\n", from, to, token);
 				int send_socket = -1;
 				for (int i = 0; i <= head_socket; ++i){
@@ -864,7 +960,7 @@ int main(int argc, char **argv)
 						//printf("sending msg size: %s\n", buffer_msgsize);
 						int flag = 1;
 						int result = setsockopt(send_socket, IPPROTO_TCP, TCP_NODELAY, (char* ) &flag, sizeof (int));
-						if (result < 0) //printf("error setting opts\n");
+						if (result < 0) {}
 						
 						if(sendall(send_socket, msg, strlen(msg)) == -1) perror("could not send to recipient\n");
 						fflush(stdout);
