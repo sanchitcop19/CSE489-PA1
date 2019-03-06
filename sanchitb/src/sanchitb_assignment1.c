@@ -63,7 +63,7 @@ struct client {
 	int num_recv;
 	int sockfd;		
 	char blocked[MAX_CLIENTS][IP_SIZE];
-
+	
 } ;
 
 struct client* clients[4] = {
@@ -482,6 +482,8 @@ int main(int argc, char **argv)
 	    /* Register STDIN */
 	    FD_SET(STDIN, &master_list);
 
+	Dict block_dict;
+	block_dict = DictCreate();
 	    head_socket = STDIN;
 	    fflush(stdout);
 	    while(TRUE){
@@ -638,17 +640,26 @@ int main(int argc, char **argv)
 							cse4589_print_and_log("[%s:END]\n", command_str_copy);
 							}
 						else if (!strcmp(command_str, "BLOCK")){
-							cse4589_print_and_log("[%s:SUCCESS]\n", "BLOCK");
 							command_str = strtok(NULL, "\n");
-							char ip[IP_SIZE];
-							strcpy(ip, command_str);
-							char msg[IP_SIZE+2];
-							memset(msg, '\0', sizeof msg);
-							strcat(msg, "B;");
-							strcat(msg, ip);
-							if (sendall(g_server_fd, msg, strlen(msg)) == -1) perror("Could not send message\n");
-							fflush(stdout);				
+
+							if (!is_validip(command_str) || !is_validip_loggedin(command_str) || DictSearch(block_dict, command_str) != 0){
+								cse4589_print_and_log("[%s:ERROR]\n", "BLOCK");
+							}else{
+								cse4589_print_and_log("[%s:SUCCESS]\n", "BLOCK");
+								char ip[IP_SIZE];
+								strcpy(ip, command_str);
+								char msg[IP_SIZE+2];
+								memset(msg, '\0', sizeof msg);
+								strcat(msg, "B;");
+								strcat(msg, ip);
+								if (sendall(g_server_fd, msg, strlen(msg)) == -1) perror("Could not send message\n");
+								fflush(stdout);	
+								DictInsert(block_dict, ip, "");			
+							}
 							cse4589_print_and_log("[%s:END]\n", "BLOCK");
+						}
+						else if (!strcmp(command_str, "UNBLOCK")){
+							//remove from dict
 						}
 						else if (!strcmp(command_str, "EXIT")){
 							close(g_server_fd);	
@@ -797,9 +808,15 @@ int main(int argc, char **argv)
                                                         cse4589_print_and_log("[%s:END]\n", command_str);
 
                                                 }else if (!strcmp(command_str, "BLOCKED")){
-                                                        cse4589_print_and_log("[%s:SUCCESS]\n", command_str);
 							command_str = strtok(NULL, "\n");
-							list_blocked(command_str);	
+                                                      	if (!is_validip(command_str) || !is_validip_loggedin(command_str)){
+								
+							cse4589_print_and_log("[%s:ERROR]\n", "BLOCKED");
+							}
+							else{
+								cse4589_print_and_log("[%s:SUCCESS]\n", "BLOCKED");
+								list_blocked(command_str);
+							}
                                                         cse4589_print_and_log("[%s:END]\n", "BLOCKED");
 						}
 								
